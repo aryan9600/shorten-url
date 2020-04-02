@@ -22,29 +22,33 @@ func PostPath(db *bolt.DB) http.HandlerFunc {
 
 		var newPath PathToURL
 
+		w.Header().Set("Content-Type", "application/json")
+
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			panic(err.Error())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
 
 		json.Unmarshal(body, &newPath)
 		path := newPath.Path
 		URL := newPath.URL
 
-		db.Update(func(tx *bolt.Tx) error {
-			b := tx.Bucket([]byte("pathToUrls"))
-			err := b.Put([]byte(path), []byte(URL))
-			if err != nil {
-				panic(err.Error())
-			}
-			return nil
-		})
+		er := AddPath(db, path, URL)
 
-		resp, err := json.Marshal(newPath)
+		if er == AlreadyPresentError(AlreadyPresentErrorString){
+			w.WriteHeader(409)
+			w.Write([]byte(`{"Error": "Path already exists"}`))
+			return
+		} else if er != nil{
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		} else {
+			resp, _ := json.Marshal(newPath)
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		w.Write(resp)
+			w.WriteHeader(http.StatusCreated)
+			w.Write(resp)
+		}
 	}
 	return fn
 }
@@ -52,26 +56,23 @@ func PostPath(db *bolt.DB) http.HandlerFunc {
 func GetURL(db *bolt.DB) http.HandlerFunc {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 
-		var path Path
+		query := r.URL.Query()
+		token := query.Get("path")
 
-		body, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			panic(err.Error())
+		URL, err := FetchURL(db, token)
+
+		if err == NotFoundError(NotFoundErrorString){
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"Error": "Path not found."}`))
+			return
+		} else if err != nil{
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
-
-		json.Unmarshal(body, &path)
-
-		tx, err := db.Begin(true)
-		if err != nil {
-			panic(err.Error())
-		}
-
-		defer tx.Rollback()
-
-		b := tx.Bucket([]byte("pathToUrls"))
-		URL := b.Get([]byte(path.Path))
-
 		resp, err := json.Marshal(string(URL))
+		if err!=nil{
+			w.WriteHeader(http.StatusInternalServerError)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -84,20 +85,15 @@ func GetURL(db *bolt.DB) http.HandlerFunc {
 func DeletePath(db *bolt.DB) http.HandlerFunc{
 	fn := func(w http.ResponseWriter, r *http.Request) {
 
-		var path Path
+		query := r.URL.Query()
+		token := query.Get("path")
 
-		body, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			panic(err.Error())
+		er := RemovePath(db, token)
+
+		if er!=nil{
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
-
-		json.Unmarshal(body, &path)
-
-		db.Update(func(tx *bolt.Tx) error {
-			b := tx.Bucket([]byte("pathToUrls"))
-			err := b.Delete([]byte(path.Path))
-			return err
-		})
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

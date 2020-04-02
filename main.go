@@ -23,52 +23,41 @@ func main() {
 		}
 		return nil
 	})
+
 	defer db.Close()
 
 	r := mux.NewRouter()
 
+	c := http.NewServeMux()
+
 	API := r.PathPrefix("/api/v1").Subrouter()
+	Redirect := r.PathPrefix("/").Subrouter()
 
 	API.HandleFunc("/shorten", api.GetURL(db)).Methods("GET")
 	API.HandleFunc("/shorten", api.PostPath(db)).Methods("POST")
 	API.HandleFunc("/shorten", api.DeletePath(db)).Methods("DELETE")
+	Redirect.HandleFunc("", MapHandler(db, c)).Methods("GET")
 
-	server := &http.Server{
-		Addr:    ":8000",
-		Handler: r,
-	}
-	go server.ListenAndServe()
-
-	c := http.NewServeMux()
-	pathHandler := MapHandler(db, c)
-
-	client := &http.Server{
-		Addr:    ":8080",
-		Handler: pathHandler,
-	}
-
-	log.Fatal(client.ListenAndServe())
-
+	log.Fatal(http.ListenAndServe(":8000", r))
 }
 
 func MapHandler(db *bolt.DB, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path[1:]
 
-		tx, err := db.Begin(true)
-		if err != nil {
-			log.Fatal(err)
-		}
+		URL, err := api.FetchURL(db, path)
 
-		defer tx.Rollback()
-
-		b := tx.Bucket([]byte("pathToUrls"))
-		v := b.Get([]byte(path))
-		if v == nil {
+		if err == api.NotFoundError(api.NotFoundErrorString){
 			w.WriteHeader(http.StatusNotFound)
-			fallback.ServeHTTP(w, r)
 			return
+		} else if err != nil{
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		} else if URL == nil{
+			http.Redirect(w, r, string(URL), http.StatusFound)
+			return
+		} else {
+			fallback.ServeHTTP(w, r)
 		}
-		http.Redirect(w, r, string(v), http.StatusFound)
 	}
 }
